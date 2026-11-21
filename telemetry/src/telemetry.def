@@ -1,0 +1,3 @@
+LIBRARY shift2-telemetry
+EXPORTS
+ Shift2TelemetryStart=_Shift2TelemetryStart@0

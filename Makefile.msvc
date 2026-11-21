@@ -1,0 +1,69 @@
+# MSVC x86 / Windows SDK. Run nmake from an x86 Developer Command Prompt.
+!IFDEF VSCMD_ARG_TGT_ARCH
+!IF "$(VSCMD_ARG_TGT_ARCH)" != "x86"
+!ERROR Select the x86 compiler environment (vcvarsall.bat x86).
+!ENDIF
+!ENDIF
+
+OUT=build\make
+DIR_STAMP=$(OUT)\.dir
+CC=cl
+CXXFLAGS=/nologo /std:c++20 /EHsc /W4 /MT /O2 /D_CRT_SECURE_NO_WARNINGS
+CFLAGS=/nologo /W4 /MT /O2
+BRIDGE_OBJS=$(OUT)\common.obj $(OUT)\usb.obj $(OUT)\effects.obj $(OUT)\proxy.obj
+MH_OBJS=$(OUT)\mh-buffer.obj $(OUT)\mh-hook.obj $(OUT)\mh-trampoline.obj $(OUT)\mh-hde32.obj
+BRIDGE_LIBS=setupapi.lib winusb.lib ole32.lib dxguid.lib advapi32.lib
+MH=telemetry\vendor\minhook
+MH_HEADERS=$(MH)\include\MinHook.h $(MH)\src\buffer.h $(MH)\src\trampoline.h $(MH)\src\hde\hde32.h $(MH)\src\hde\table32.h $(MH)\src\hde\pstdint.h
+
+all: input telemetry
+
+input: $(OUT)\dinput8.dll
+telemetry: $(OUT)\shift2-telemetry.dll
+
+$(DIR_STAMP):
+	@if not exist "$(OUT)" mkdir "$(OUT)"
+	@type nul > "$@"
+
+$(OUT)\common.obj: src\common.cpp src\bridge.hpp $(DIR_STAMP)
+	$(CC) $(CXXFLAGS) /c src\common.cpp /Fo"$@"
+$(OUT)\usb.obj: src\usb.cpp src\bridge.hpp $(DIR_STAMP)
+	$(CC) $(CXXFLAGS) /c src\usb.cpp /Fo"$@"
+$(OUT)\effects.obj: src\effects.cpp src\bridge.hpp $(DIR_STAMP)
+	$(CC) $(CXXFLAGS) /c src\effects.cpp /Fo"$@"
+$(OUT)\proxy.obj: src\proxy.cpp src\bridge.hpp $(DIR_STAMP)
+	$(CC) $(CXXFLAGS) /c src\proxy.cpp /Fo"$@"
+$(OUT)\dinput8.dll: $(BRIDGE_OBJS) src\dinput8.def
+	$(CC) /nologo /LD /MT $(BRIDGE_OBJS) /link /DEF:src\dinput8.def /OUT:"$@" /IMPLIB:"$(OUT)\dinput8.lib" $(BRIDGE_LIBS)
+
+$(OUT)\mh-buffer.obj: $(MH)\src\buffer.c $(MH_HEADERS) $(DIR_STAMP)
+	$(CC) $(CFLAGS) /c $(MH)\src\buffer.c /Fo"$@"
+$(OUT)\mh-hook.obj: $(MH)\src\hook.c $(MH_HEADERS) $(DIR_STAMP)
+	$(CC) $(CFLAGS) /c $(MH)\src\hook.c /Fo"$@"
+$(OUT)\mh-trampoline.obj: $(MH)\src\trampoline.c $(MH_HEADERS) $(DIR_STAMP)
+	$(CC) $(CFLAGS) /c $(MH)\src\trampoline.c /Fo"$@"
+$(OUT)\mh-hde32.obj: $(MH)\src\hde\hde32.c $(MH_HEADERS) $(DIR_STAMP)
+	$(CC) $(CFLAGS) /c $(MH)\src\hde\hde32.c /Fo"$@"
+$(OUT)\telemetry.obj: telemetry\src\telemetry.cpp $(MH_HEADERS) $(DIR_STAMP)
+	$(CC) $(CXXFLAGS) /c telemetry\src\telemetry.cpp /Fo"$@"
+$(OUT)\shift2-telemetry.dll: $(OUT)\telemetry.obj $(MH_OBJS) telemetry\src\telemetry.def
+	$(CC) /nologo /LD /MT $(OUT)\telemetry.obj $(MH_OBJS) /link /DEF:telemetry\src\telemetry.def /OUT:"$@" /IMPLIB:"$(OUT)\shift2-telemetry.lib" bcrypt.lib user32.lib
+
+$(OUT)\telemetry-test.exe: telemetry\src\test.cpp telemetry\src\telemetry.cpp $(MH_OBJS) $(MH_HEADERS)
+	$(CC) $(CXXFLAGS) telemetry\src\test.cpp $(MH_OBJS) /Fo"$(OUT)\telemetry-test.obj" /Fe"$@" /link bcrypt.lib user32.lib
+$(OUT)\effects-test.exe: tests\effects-test.cpp src\bridge.hpp $(OUT)\effects.obj $(OUT)\common.obj $(OUT)\usb.obj
+	$(CC) $(CXXFLAGS) tests\effects-test.cpp $(OUT)\effects.obj $(OUT)\common.obj $(OUT)\usb.obj /Fo"$(OUT)\effects-test.obj" /Fe"$@" /link $(BRIDGE_LIBS)
+$(OUT)\bridge-smoke.exe: tests\smoke.cpp $(DIR_STAMP)
+	$(CC) $(CXXFLAGS) tests\smoke.cpp /Fo"$(OUT)\bridge-smoke.obj" /Fe"$@" /link dxguid.lib dinput8.lib
+
+check: test-effects test-telemetry
+
+test-effects: $(OUT)\effects-test.exe
+	$(OUT)\effects-test.exe
+
+test-telemetry: $(OUT)\telemetry-test.exe
+	$(OUT)\telemetry-test.exe
+
+# This target opens the WinUSB device. Close the game/other wheel users first.
+check-hardware: input $(OUT)\bridge-smoke.exe
+	cd $(OUT) && bridge-smoke.exe
